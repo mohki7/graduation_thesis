@@ -1,6 +1,5 @@
 ## 参考論文, dataフォルダは除外
 
-data/
 references/
 documents/
 .gitignore
