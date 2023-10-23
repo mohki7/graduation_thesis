@@ -406,3 +406,17 @@ class Att_Analysis:
             df_game_time.drop(2021, inplace=True)
 
         return df_game_time
+
+    def plot_game_time(self):
+        # すべての年の平均試合時間を棒グラフにする
+        # バーの上にその試合時間を表示
+        game_time = self.get_game_time()
+        plt.figure(figsize=(12, 8))
+        plt.title('Yearly Game Time')
+        plt.xlabel('Year')
+        plt.ylabel('Game Time (minutes)')
+        plt.xticks(game_time.index, game_time.index)
+        for x, y in zip(game_time.index, game_time['Game Time (minutes)']):
+            plt.text(x, y, y, ha='center', va='bottom')
+        plt.bar(game_time.index, game_time['Game Time (minutes)'])
+        plt.show()
