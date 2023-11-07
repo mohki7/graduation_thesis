@@ -7,6 +7,7 @@ import statsmodels.api as sm
 
 from statsmodels.stats.outliers_influence import summary_table
 from statsmodels.tsa.deterministic import DeterministicProcess, Fourier
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 
 class ITS:
     """中断時系列分析を行うクラス
@@ -355,6 +356,7 @@ class MITS:
                 df_after (DataFrame): 介入後のデータフレーム。dfと同じ形式
                 df_its (DataFrame): OLSで分析するためのデータフレーム。t, xt, t*xtの列を持つ（時間のインデックス、level change、slope change）
                 df_period (DataFrame): Periodic OLSで分析するためのデータフレーム。t, xt, t*xt, sin(2πt/period), cos(2πt/period)の列を持つ（時間のインデックス、level change、slope change、sin、cos）
+                X (DataFrame): モデルに入力する説明変数。分析に用いた変数間の相関関係を確認するために用いる
 
             モデルの設定
                 全体
@@ -400,6 +402,7 @@ class MITS:
 
             結果確認
                 show_summary(): とりあえずこれを呼び出せば、model.methodに基づいて設定したモデルのsummaryを出す。
+                show_correration(): 変数間の相関係数を出力する
 
             #!工事中
                 ・交互作用項の実装
@@ -408,6 +411,7 @@ class MITS:
         self.df = df # インスタンスに渡された元のデータフレーム
         self.df_its = None # 分析用のデータフレーム
         self.df_period = None # Periodic OLSの分析のためのデータフレーム
+        self.X = None # モデルに入力する説明変数
 
         self.intervention = interventions
         self.num_interventions = len(interventions)
@@ -541,6 +545,7 @@ class MITS:
         # if self.interaction:
         #     X = sm.add_constant(self.df_its.reset_index()[[self.variables[0], self.variables[1], self.variables[2], self.variables[3]]])
         y = self.df_its.reset_index()['Attendance']
+        self.X = X
         self.model = sm.OLS(y, X).fit()
         self.model_name = 'OLS'
 
@@ -594,8 +599,7 @@ class MITS:
         # row_list.extend(sin_cos_list)
         X = sm.add_constant(self.df_period.reset_index().drop(columns=['index', 'Attendance']))
         y = self.df_period.reset_index()['Attendance']
-        # print(X)
-        # print(y)
+        self.X = X
         # モデルを作成
         self.model = sm.OLS(y, sm.add_constant(X)).fit()
         # 訓練
@@ -630,7 +634,7 @@ class MITS:
         # モデルの名前が現在のモデルと異なる場合も実行
         if self.model_name != self.method:
             self.fit()
-
+        print("VIF:", self.calc_vif()) 
         return self.model.summary()
 
     def plot_predict(self, alpha=0.05, is_counterfactual=False, is_prediction_std=False):
@@ -711,3 +715,26 @@ class MITS:
         y_cf_predict = self.model.predict(cf_data)
 
         return y_cf_predict
+
+    def calc_vif(self):
+        """多重共線性の確認のためのVIFを計算する
+
+        Returns:
+            _type_: _description_
+        """
+        vif = [variance_inflation_factor(self.X.values, i) for i in range(self.X.shape[1])]
+        return vif
+
+    def show_correlation(self):
+        """変数間の相関係数を出力する
+        """
+        if self.X is None:
+            self.fit()
+        plt.figure(figsize=(20, 16))  # 画像サイズを大きく設定
+        sns.set(font_scale=2)  # 文字サイズを設定
+        heatmap = sns.heatmap(self.X.corr(), annot=True, cmap='bwr', fmt=".2f")
+        heatmap.set_xticklabels(heatmap.get_xticklabels(), rotation=45, horizontalalignment='right')  # X軸のラベルを回転
+        heatmap.set_yticklabels(heatmap.get_yticklabels(), rotation=0)  # Y軸のラベルは回転させない
+        plt.tight_layout()  # レイアウトの調整
+        plt.show()  # ヒートマップを表示
+        print("VIF:", self.calc_vif())  # 相関係数のテーブルも出力する場合はコメントアウトを解除

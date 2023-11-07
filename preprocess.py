@@ -61,7 +61,7 @@ class Att_Analysis:
             試合時間関係
                 get_game_time(): すべての年の平均試合時間を返す
         """
-        self.START_YEAR = 2012
+        self.START_YEAR = 2013
         self.END_YEAR = 2023
 
         self.IS_REMOVE_COVID = is_remove_covid
@@ -77,7 +77,7 @@ class Att_Analysis:
 
         self.fig_size = (12, 8)
 
-        self.df_2012 = None
+        # self.df_2012 = None
         self.df_2013 = None
         self.df_2014 = None
         self.df_2015 = None
@@ -105,7 +105,7 @@ class Att_Analysis:
             →重複しているのは順延になった試合が両方とも記録されているため。日付が古い方は中止になった試合なので削除
             →欠損値は試合が中止になった、またはその順延試合が翌日のダブルヘッダーの1試合目の場合。そのため削除
         """
-        self.df_2012 = pd.read_csv('./data/mlb_2012.csv').sort_values(by='Date', ascending=False).drop_duplicates(subset=['Game ID'], keep='first').dropna()
+        # self.df_2012 = pd.read_csv('./data/mlb_2012.csv').sort_values(by='Date', ascending=False).drop_duplicates(subset=['Game ID'], keep='first').dropna()
         self.df_2013 = pd.read_csv('./data/mlb_2013.csv').sort_values(by='Date', ascending=False).drop_duplicates(subset=['Game ID'], keep='first').dropna()
         self.df_2014 = pd.read_csv('./data/mlb_2014.csv').sort_values(by='Date', ascending=False).drop_duplicates(subset=['Game ID'], keep='first').dropna()
         self.df_2015 = pd.read_csv('./data/mlb_2015.csv').sort_values(by='Date', ascending=False).drop_duplicates(subset=['Game ID'], keep='first').dropna()
@@ -119,7 +119,7 @@ class Att_Analysis:
         self.df_2023 = pd.read_csv('./data/mlb_2023.csv').sort_values(by='Date', ascending=False).drop_duplicates(subset=['Game ID'], keep='first').dropna()
 
         # すべてのデータフレームを結合
-        self.df = pd.concat([self.df_2012, self.df_2013, self.df_2014, self.df_2015, self.df_2016, self.df_2017, self.df_2018,
+        self.df = pd.concat([self.df_2013, self.df_2014, self.df_2015, self.df_2016, self.df_2017, self.df_2018,
                              self.df_2019, self.df_2020, self.df_2021, self.df_2022, self.df_2023], ignore_index=True)
 
         # Date列をdatetime型に変換
@@ -141,10 +141,10 @@ class Att_Analysis:
         df = pd.DataFrame()
         df['year'] = [year for year in range(self.START_YEAR, self.END_YEAR + 1)]
 
-        df['n_game'] = [self.df_2012.shape[0], self.df_2013.shape[0], self.df_2014.shape[0], self.df_2015.shape[0], self.df_2016.shape[0], self.df_2017.shape[0], self.df_2018.shape[0],
+        df['n_game'] = [self.df_2013.shape[0], self.df_2014.shape[0], self.df_2015.shape[0], self.df_2016.shape[0], self.df_2017.shape[0], self.df_2018.shape[0],
                         self.df_2019.shape[0], self.df_2020.shape[0], self.df_2021.shape[0], self.df_2022.shape[0], self.df_2023.shape[0]]
 
-        df['n_NaN'] = [self.df_2012.isnull().sum().sum(), self.df_2013.isnull().sum().sum(), self.df_2014.isnull().sum().sum(), self.df_2015.isnull().sum().sum(), self.df_2016.isnull().sum().sum(), self.df_2017.isnull().sum().sum(), self.df_2018.isnull().sum().sum(),
+        df['n_NaN'] = [self.df_2013.isnull().sum().sum(), self.df_2014.isnull().sum().sum(), self.df_2015.isnull().sum().sum(), self.df_2016.isnull().sum().sum(), self.df_2017.isnull().sum().sum(), self.df_2018.isnull().sum().sum(),
                         self.df_2019.isnull().sum().sum(), self.df_2020.isnull().sum().sum(), self.df_2021.isnull().sum().sum(), self.df_2022.isnull().sum().sum(), self.df_2023.isnull().sum().sum()]
 
 
