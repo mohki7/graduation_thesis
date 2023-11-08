@@ -399,6 +399,7 @@ class MITS:
             モデル関連
                 Periodic OLS
                     optim_params_periodic_ols(): 周期回帰に使うperiodとorderをR^2スコアが最大になるようにパラメータを最適化する。#! これは後でちゃんと作ろう。今は手動でパラメータを決めている
+                    calculate_hyperparameters_periodic_regression(): 周期回帰のハイパーパラメータを計算するメソッド
 
             結果確認
                 show_summary(): とりあえずこれを呼び出せば、model.methodに基づいて設定したモデルのsummaryを出す。
@@ -590,8 +591,9 @@ class MITS:
             self.prepare_data_for_period_ols()
 
         # 最適パラメータを探索
-        if self.optim_params_periodic_ols:
-            self.period, self.order = self.optim_params_periodic_ols()
+        if self.optim_params_periodic_ols is True:
+            self.period, self.order = self.optim_params_period_ols()
+            print(f'最適化されたパラメータ: period={self.period}, order={self.order}')
 
         # row_list = [self.variables[i] for i in range(len(self.variables))]
         # 'sin(1,6)', cos(1,6)', 'sin(2,6)', 'cos(2,6)', 'sin(3,6)', 'cos(3,6)'のように列名を作成
@@ -738,3 +740,29 @@ class MITS:
         plt.tight_layout()  # レイアウトの調整
         plt.show()  # ヒートマップを表示
         print("VIF:", self.calc_vif())  # 相関係数のテーブルも出力する場合はコメントアウトを解除
+
+    def calculate_hyperparameters_periodic_regression(self):
+        """周期回帰のハイパーパラメータをR^2値が最小になるように計算するメソッド
+
+        Returns:
+            _type_: 最適化されたperiod, order
+        """
+        best_score = -np.inf
+        best_params = (0, 0)
+
+        for period in range(1, 13):
+            for order in range(1, 5):
+                try:
+                    self.period = period
+                    self.order = order
+                    self.fit_periodic_ols()
+                    score = self.model.rsquared
+
+                    if score > best_score:
+                        best_score = score
+                        best_params = (period, order)
+                except:
+                    continue
+
+        self.period, self.order = best_params
+        return best_params
