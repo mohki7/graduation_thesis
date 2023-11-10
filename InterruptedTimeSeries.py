@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import optuna
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+from optuna.samplers import TPESampler
 import warnings
 
 import statsmodels.api as sm
@@ -11,7 +13,8 @@ from statsmodels.stats.outliers_influence import summary_table
 from statsmodels.tsa.deterministic import DeterministicProcess, Fourier
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tools.sm_exceptions import ConvergenceWarning, ValueWarning, UserWarning
+from statsmodels.tools.sm_exceptions import ConvergenceWarning, ValueWarning
+# from .autonotebook import tqdm as notebook_tqdm
 
 class ITS:
     """中断時系列分析を行うクラス
@@ -351,7 +354,7 @@ class ITS:
 class MITS:
     """中断時系列分析を行うクラス。複数の介入点を設定できる
     """
-    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False, optim_params_sarimax=False):
+    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False, optim_params_sarimax=False, seed=0):
         """
         Args:
             DataFrame関連
@@ -435,6 +438,7 @@ class MITS:
 
         self.optim_params_periodic_ols=optim_params_periodic_ols
         self.optim_params_sarimax = optim_params_sarimax
+        self.seed = seed
 
     def separate_data(self):
         """介入ごとのデータに分ける
@@ -535,12 +539,12 @@ class MITS:
             self.fit_ols()
         elif self.method == 'Periodic OLS':
             self.fit_periodic_ols()
-        elif self.method == 'SARIMA':
-            self.fit_sarima()
+        elif self.method == 'SARIMAX':
+            self.fit_sarimax()
         elif self.method == 'ARIMA':
             self.fit_arima()
         else:
-            print('Please select method from OLS, Periodic OLS, SARIMA, ARIMA')
+            print('Please select method from OLS, Periodic OLS, SARIMAX, ARIMA')
 
     def fit_ols(self):
         """線形回帰で中断時系列分析を行う
@@ -581,7 +585,7 @@ class MITS:
 
         self.df_period = pd.concat([self.df_period, H], axis=1)
 
-    def optim_param_sarimax(self, n_trials=100):
+    def optim_param_sarimax(self, n_trials=300):
         """SARIMAXモデルのパラメータをOptunaで最適化する
 
         Args:
@@ -600,14 +604,14 @@ class MITS:
                 trial.suggest_int('seasonal_ar_order', 0, 3),
                 trial.suggest_int('seasonal_d_order', 0, 2),
                 trial.suggest_int('seasonal_ma_order', 0, 3),
-            6 # 月次データの場合
-            )
+                6)
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', category=ConvergenceWarning)
                     warnings.filterwarnings('ignore', category=ValueWarning)
                     warnings.filterwarnings('ignore', category=UserWarning)
-                    model = SARIMAX(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']),
+                    # warnings.filterwarnings('ignore', category=RuntimeWarning)
+                    model = SARIMAX(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
                                     order=order, seasonal_order=seasonal_order,
                                     enforce_stationarity=False, enforce_invertibility=False)
                     model_fit = model.fit(disp=False)
@@ -616,8 +620,10 @@ class MITS:
                 return float('inf')
 
         # Optunaによる最適化
-        study = optuna.create_study(direction='minimize')
+        sampler = TPESampler(seed=self.seed)
+        study = optuna.create_study(direction='minimize', sampler=sampler)
         study.optimize(objective, n_trials=n_trials)
+        print(f"seed値:{self.seed}")
 
         # 最適なパラメータを返す
         return study.best_params
@@ -661,7 +667,7 @@ class MITS:
         # 訓練
         self.model_name = 'Periodic OLS'
 
-    def fit_sarima(self, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12)):
+    def fit_sarimax(self, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12)):
         """SARIMAで中断時系列分析を行う
 
         Args:
@@ -673,7 +679,7 @@ class MITS:
         #! ここは未改修。self.df_beforeとかないし。
         #! 介入は複数ある時に未対応
         """
-        self.model_name = "SARIMA"
+        self.model_name = "SARIMAX"
         if self.df_sarimax is None:
             self.prepare_data_for_sarimax()
         # 最適化するオプションがあった場合、optunaで最適化したパラメータを用いる
@@ -683,9 +689,9 @@ class MITS:
             seasonal_order=(dict_param['seasonal_ar_order'], dict_param['seasonal_d_order'], dict_param['seasonal_ma_order'], 6)
 
         self.model = SARIMAX(self.df_sarimax['Attendance'],
-                             exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']),
+                             exog=self.df_sarimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
                              order=order,
-                             seasonal_order=seasonal_order).fit(disp=True) #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
+                             seasonal_order=seasonal_order).fit(disp=False) #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
 
     def fit_arima(self):
         self.model_name = "ARIMA"
@@ -703,6 +709,33 @@ class MITS:
         if self.method == 'OLS' or self.method == 'Periodic OLS':
             print("VIF:", self.calc_vif())
         return self.model.summary()
+
+    def plot_sarimax_params(self):
+        """SARIMAXの最適化されたパラメータの妥当性を確認する
+        """
+        if self.model is None:
+            self.fit()
+        # モデルの名前が現在のモデルと異なる場合も実行
+        if self.model_name != self.method:
+            self.fit()
+
+        # 残差のプロット
+        residuals = self.model.resid
+        plt.figure(figsize=(12, 8))
+        plt.plot(residuals)
+        plt.xticks(rotation=90)
+        plt.title('Residuals')
+        plt.show()
+
+        # 残差のACFとPACF
+        fig, ax = plt.subplots(1, 2, figsize=(12, 8))
+        sm.graphics.tsa.plot_acf(residuals, lags=min(26, len(residuals)//2), ax=ax[0])
+        sm.graphics.tsa.plot_pacf(residuals, lags=min(26, len(residuals)//2), ax=ax[1])
+        plt.show()
+
+        # モデル診断
+        self.model.plot_diagnostics(figsize=(12, 8))
+        plt.show()
 
     def plot_predict(self, alpha=0.05, is_counterfactual=False, is_prediction_std=False):
         """予測結果を図示する
@@ -765,13 +798,18 @@ class MITS:
         if self.df_period is None:
             self.prepare_data_for_period_ols()
 
+        cf_data = None
         if self.method == 'OLS':
             cf_data = self.df_its.reset_index().drop(columns=['index', 'Attendance']).copy(deep=True)
             # if self.interaction:
             #     cf_data = self.df_its[[self.variables[0], self.variables[1], self.variables[2], self.variables[3]]].copy(deep=True)
-
-        if self.method == 'Periodic OLS':
+        elif self.method == 'SARIMAX':
+            cf_data = self.df_sarimax.drop(columns=['Attendance'])
+        elif self.method == 'Periodic OLS':
             cf_data = self.df_period.drop(columns=['Attendance'])
+
+        if cf_data is None:
+            raise ValueError("Method must be one of 'OLS', 'SARIMAX', or 'Periodic OLS'")
 
         for i in range(self.num_interventions):
             cf_data[f'level change {i}'] = 0
@@ -831,3 +869,17 @@ class MITS:
 
         self.period, self.order = best_params
         return best_params
+
+    def fit_state_space_model(self):
+        """状態空間モデルで中断時系列分析を行う
+        """
+        self.model = sm.tsa.statespace.DynamicFactor(self.df_sarimax['Attendance'], 
+                                                      exog=self.df_sarimax.drop(columns=['Attendance']), 
+                                                      k_factors=1, factor_order=1)
+        self.results = self.model.fit()
+
+    def fit_hierarchical_bayesian_model(self):
+        """階層ベイズモデルで中断時系列分析を行う
+        """
+        # ここに階層ベイズモデルの実装を追加します
+        
