@@ -8,6 +8,7 @@ import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import summary_table
 from statsmodels.tsa.deterministic import DeterministicProcess, Fourier
 from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 class ITS:
     """中断時系列分析を行うクラス
@@ -413,6 +414,7 @@ class MITS:
         self.df_its = None # 分析用のデータフレーム
         self.df_period = None # Periodic OLSの分析のためのデータフレーム
         self.X = None # モデルに入力する説明変数
+        self.df_sarimax = None # SARIMAXの分析のためのデータフレーム
 
         self.intervention = interventions
         self.num_interventions = len(interventions)
@@ -575,6 +577,13 @@ class MITS:
 
         self.df_period = pd.concat([self.df_period, H], axis=1)
 
+    def prepare_data_for_sarimax(self):
+        """SARIMAX分析用のデータを用意する
+        """
+        if self.df_its is None:
+            self.prepare_data()
+        self.df_sarimax = self.df_its.copy(deep=True)
+
     def optim_params_period_ols(self):
         """周期回帰に使う最適パラメータを探索する
         self.period, self.orderを最適化する
@@ -617,12 +626,16 @@ class MITS:
         Returns:
             _type_: _description_
         #! ここは未改修。self.df_beforeとかないし。
+        #! 介入は複数ある時に未対応
         """
         self.model_name = "SARIMA"
+        if self.df_sarimax is None:
+            self.prepare_data_for_sarimax()
 
-        self.model = SARIMAX(self.df_before['Attendance'], order=order, seasonal_order=seasonal_order) #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
-        results = self.model.fit(disp=False) #? dispって何？
-        return results
+        self.model = SARIMAX(self.df_sarimax['Attendance'],
+                             exog=self.df_sarimax[["level change 0", "slope change 0"]],
+                             order=order,
+                             seasonal_order=seasonal_order).fit(disp=True) #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
 
     def fit_arima(self):
         self.model_name = "ARIMA"
@@ -636,7 +649,9 @@ class MITS:
         # モデルの名前が現在のモデルと異なる場合も実行
         if self.model_name != self.method:
             self.fit()
-        print("VIF:", self.calc_vif()) 
+        # モデルがOLSやPeriodic OLSの場合はVIFも表示:
+        if self.method == 'OLS' or self.method == 'Periodic OLS':
+            print("VIF:", self.calc_vif())
         return self.model.summary()
 
     def plot_predict(self, alpha=0.05, is_counterfactual=False, is_prediction_std=False):
