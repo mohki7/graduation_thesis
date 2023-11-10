@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import optuna
+import warnings
 
 import statsmodels.api as sm
 
@@ -9,6 +11,7 @@ from statsmodels.stats.outliers_influence import summary_table
 from statsmodels.tsa.deterministic import DeterministicProcess, Fourier
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tools.sm_exceptions import ConvergenceWarning, ValueWarning, UserWarning
 
 class ITS:
     """中断時系列分析を行うクラス
@@ -348,7 +351,7 @@ class ITS:
 class MITS:
     """中断時系列分析を行うクラス。複数の介入点を設定できる
     """
-    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False):
+    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False, optim_params_sarimax=False):
         """
         Args:
             DataFrame関連
@@ -431,6 +434,7 @@ class MITS:
         # self.variables = ['time since start', 'level change', 'slope change'] # t, xt, t*xt
 
         self.optim_params_periodic_ols=optim_params_periodic_ols
+        self.optim_params_sarimax = optim_params_sarimax
 
     def separate_data(self):
         """介入ごとのデータに分ける
@@ -577,6 +581,47 @@ class MITS:
 
         self.df_period = pd.concat([self.df_period, H], axis=1)
 
+    def optim_param_sarimax(self, n_trials=100):
+        """SARIMAXモデルのパラメータをOptunaで最適化する
+
+        Args:
+            n_trials (int, optional): 試行回数。増やすとより良いパラメータの組み合わせを見つけられるが、計算時間も増加する Defaults to 100.
+        """
+        if self.df_sarimax is None:
+            self.prepare_data_for_sarimax()
+        def objective(trial):
+            # SARIMAXモデルのパラメータを設定
+            order=(
+                trial.suggest_int('order_p', 0, 3),
+                trial.suggest_int('d_order', 0, 2),
+                trial.suggest_int('ma_order', 0, 3)
+            )
+            seasonal_order=(
+                trial.suggest_int('seasonal_ar_order', 0, 3),
+                trial.suggest_int('seasonal_d_order', 0, 2),
+                trial.suggest_int('seasonal_ma_order', 0, 3),
+            6 # 月次データの場合
+            )
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=ConvergenceWarning)
+                    warnings.filterwarnings('ignore', category=ValueWarning)
+                    warnings.filterwarnings('ignore', category=UserWarning)
+                    model = SARIMAX(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']),
+                                    order=order, seasonal_order=seasonal_order,
+                                    enforce_stationarity=False, enforce_invertibility=False)
+                    model_fit = model.fit(disp=False)
+                    return model_fit.aic
+            except Exception as e:
+                return float('inf')
+
+        # Optunaによる最適化
+        study = optuna.create_study(direction='minimize')
+        study.optimize(objective, n_trials=n_trials)
+
+        # 最適なパラメータを返す
+        return study.best_params
+
     def prepare_data_for_sarimax(self):
         """SARIMAX分析用のデータを用意する
         """
@@ -631,9 +676,14 @@ class MITS:
         self.model_name = "SARIMA"
         if self.df_sarimax is None:
             self.prepare_data_for_sarimax()
+        # 最適化するオプションがあった場合、optunaで最適化したパラメータを用いる
+        if self.optim_params_sarimax is True:
+            dict_param = self.optim_param_sarimax()
+            order=(dict_param['order_p'], dict_param['d_order'], dict_param['ma_order'])
+            seasonal_order=(dict_param['seasonal_ar_order'], dict_param['seasonal_d_order'], dict_param['seasonal_ma_order'], 6)
 
         self.model = SARIMAX(self.df_sarimax['Attendance'],
-                             exog=self.df_sarimax[["level change 0", "slope change 0"]],
+                             exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']),
                              order=order,
                              seasonal_order=seasonal_order).fit(disp=True) #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
 
