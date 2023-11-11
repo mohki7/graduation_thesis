@@ -74,6 +74,7 @@ class Att_Analysis:
         self.df_monthly_att_all_covid_removed = None
         self.df_monthly_att_all_addup = None
         self.df_monthly_att_all_addup_covid_removed = None
+        self.df_game_time_addup= None
 
         self.fig_size = (12, 8)
 
@@ -406,6 +407,51 @@ class Att_Analysis:
             df_game_time.drop(2021, inplace=True)
 
         return df_game_time
+
+    def add_mar_oct_to_apr_sep_game_time(self):
+        """各年の3月と10月を4月と9月に合算する。
+        Returns:
+            DataFrame: 3月と10月を4月と9月に合算したデータフレーム
+        """
+        # self.dfのMonthが3だったら4, 10だったら9に変更
+        self.df_game_time_addup = self.df.copy()
+        self.df_game_time_addup['Month'] = self.df_game_time_addup['Month'].replace({3: 4, 10: 9})
+
+
+    def get_monthly_game_time(self, year):
+        """指定した年の月ごとの平均試合時間を返す
+
+        Args:
+            year (int): 年
+
+        Returns:
+            DataFrame: 指定した年の月ごとの平均試合時間
+        """
+        if self.IS_ADD_UP:
+            if self.df_game_time_addup is None:
+                self.add_mar_oct_to_apr_sep_game_time()
+            df_tmp = self.df_game_time_addup
+        else:
+            df_tmp = self.df
+        df_ = df_tmp[df_tmp['Year'] == year]
+
+        df_monthly_game_time = df_.groupby('Month').agg({'Game Time (minutes)': 'mean'}).astype(int)
+
+        df_monthly_game_time.index = [str(year) + '-' + str(month) for month in df_monthly_game_time.index]
+        df_monthly_game_time.index = pd.to_datetime(df_monthly_game_time.index, format='%Y-%m').strftime('%Y-%m')
+
+        return df_monthly_game_time
+
+    def get_monthly_game_time_all(self):
+        """すべての年の月ごとの平均試合時間を返す"""
+        df_monthly_game_time_all = pd.DataFrame()
+        for year in range(self.START_YEAR, self.END_YEAR + 1):
+            if self.IS_REMOVE_COVID:
+                if year == 2021:
+                    continue
+            df_monthly_game_time = self.get_monthly_game_time(year)
+            df_monthly_game_time_all = pd.concat([df_monthly_game_time_all, df_monthly_game_time], axis=0)
+        return df_monthly_game_time_all
 
     def plot_game_time(self):
         # すべての年の平均試合時間を棒グラフにする
