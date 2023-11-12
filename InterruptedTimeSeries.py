@@ -13,6 +13,7 @@ from statsmodels.stats.outliers_influence import summary_table
 from statsmodels.tsa.deterministic import DeterministicProcess, Fourier
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tools.sm_exceptions import ConvergenceWarning, ValueWarning
 # from .autonotebook import tqdm as notebook_tqdm
 
@@ -354,7 +355,7 @@ class ITS:
 class MITS:
     """中断時系列分析を行うクラス。複数の介入点を設定できる
     """
-    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False, optim_params_sarimax=False, seed=0):
+    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False, optim_params_sarimax=False, optim_params_arimax=False, seed=0):
         """
         Args:
             DataFrame関連
@@ -421,6 +422,8 @@ class MITS:
         self.df_period = None # Periodic OLSの分析のためのデータフレーム
         self.X = None # モデルに入力する説明変数
         self.df_sarimax = None # SARIMAXの分析のためのデータフレーム
+        self.df_arimax = None # ARIMAXの分析のためのデータフレーム
+
 
         self.intervention = interventions
         self.num_interventions = len(interventions)
@@ -438,6 +441,7 @@ class MITS:
 
         self.optim_params_periodic_ols=optim_params_periodic_ols
         self.optim_params_sarimax = optim_params_sarimax
+        self.optim_params_arimax = optim_params_arimax #! ここあとで、最適化するかどうかのパラメータは一つにまとめよう。
         self.seed = seed
 
     def separate_data(self):
@@ -532,8 +536,8 @@ class MITS:
         Option:
             OLS: 線形回帰
             Periodic OLS: 周期回帰
-            SARIMA: SARIMA
-            ARIMA: ARIMA
+            SARIMA: SARIMAX
+            ARIMA: ARIMAX
         """
         if self.method == 'OLS':
             self.fit_ols()
@@ -541,8 +545,8 @@ class MITS:
             self.fit_periodic_ols()
         elif self.method == 'SARIMAX':
             self.fit_sarimax()
-        elif self.method == 'ARIMA':
-            self.fit_arima()
+        elif self.method == 'ARIMAX':
+            self.fit_arimax()
         else:
             print('Please select method from OLS, Periodic OLS, SARIMAX, ARIMA')
 
@@ -585,6 +589,13 @@ class MITS:
 
         self.df_period = pd.concat([self.df_period, H], axis=1)
 
+    def prepare_data_for_arimax(self):
+        """ARIMAX分析用のデータを用意する
+        """
+        if self.df_its is None:
+            self.prepare_data()
+        self.df_arimax = self.df_its.copy(deep=True)
+
     def optim_param_sarimax(self, n_trials=300):
         """SARIMAXモデルのパラメータをOptunaで最適化する
 
@@ -612,6 +623,48 @@ class MITS:
                     warnings.filterwarnings('ignore', category=UserWarning)
                     # warnings.filterwarnings('ignore', category=RuntimeWarning)
                     model = SARIMAX(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
+                                    order=order, seasonal_order=seasonal_order,
+                                    enforce_stationarity=False, enforce_invertibility=False)
+                    model_fit = model.fit(disp=False)
+                    return model_fit.aic
+            except Exception as e:
+                return float('inf')
+
+        # Optunaによる最適化
+        sampler = TPESampler(seed=self.seed)
+        study = optuna.create_study(direction='minimize', sampler=sampler)
+        study.optimize(objective, n_trials=n_trials)
+        print(f"seed値:{self.seed}")
+
+        # 最適なパラメータを返す
+        return study.best_params
+
+    def optim_param_arimax(self, n_trials=300):
+        """ARIMAXモデルのパラメータをOptunaで最適化する
+
+        Args:
+            n_trials (int, optional): 試行回数。増やすとより良いパラメータの組み合わせを見つけられるが、計算時間も増加する Defaults to 100.
+        """
+        if self.df_arimax is None:
+            self.prepare_data_for_arimax()
+        def objective(trial):
+            # SARIMAXモデルのパラメータを設定
+            order=(
+                trial.suggest_int('order_p', 0, 3),
+                trial.suggest_int('d_order', 0, 2),
+                trial.suggest_int('ma_order', 0, 3)
+            )
+            seasonal_order=(
+                trial.suggest_int('seasonal_ar_order', 0, 3),
+                trial.suggest_int('seasonal_d_order', 0, 2),
+                trial.suggest_int('seasonal_ma_order', 0, 3))
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=ConvergenceWarning)
+                    warnings.filterwarnings('ignore', category=ValueWarning)
+                    warnings.filterwarnings('ignore', category=UserWarning)
+                    # warnings.filterwarnings('ignore', category=RuntimeWarning)
+                    model = ARIMA(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
                                     order=order, seasonal_order=seasonal_order,
                                     enforce_stationarity=False, enforce_invertibility=False)
                     model_fit = model.fit(disp=False)
@@ -693,9 +746,32 @@ class MITS:
                              order=order,
                              seasonal_order=seasonal_order).fit(disp=False) #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
 
-    def fit_arima(self):
-        self.model_name = "ARIMA"
-        return print('ARIMA')
+    def fit_arimax(self, order=(1, 1, 1)):
+        """SARIMAで中断時系列分析を行う
+
+        Args:
+            order (tuple, optional): _description_. Defaults to (1, 1, 1).
+            seasonal_order (tuple, optional): _description_. Defaults to (1, 1, 1, 12).
+
+        Returns:
+            _type_: _description_
+        #! ここは未改修。self.df_beforeとかないし。
+        #! 介入は複数ある時に未対応
+        """
+        self.model_name = "ARIMAX"
+        if self.df_arimax is None:
+            self.prepare_data_for_arimax()
+        # 最適化するオプションがあった場合、optunaで最適化したパラメータを用いる
+        if self.optim_params_arimax is True:
+            dict_param = self.optim_param_arimax()
+            order=(dict_param['order_p'], dict_param['d_order'], dict_param['ma_order'])
+            seasonal_order=(dict_param['seasonal_ar_order'], dict_param['seasonal_d_order'], dict_param['seasonal_ma_order'])
+
+        self.model = ARIMA(self.df_arimax['Attendance'],
+                             exog=self.df_arimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
+                             order=order).fit() #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
+        self.model_name = "ARIMAX"
+
 
     def show_summary(self):
         """結果を表示する
@@ -736,6 +812,9 @@ class MITS:
         # モデル診断
         self.model.plot_diagnostics(figsize=(12, 8))
         plt.show()
+
+    def plot_arimax_params(self):
+        self.plot_sarimax_params()
 
     def plot_predict(self, alpha=0.05, is_counterfactual=False, is_prediction_std=False):
         """予測結果を図示する
