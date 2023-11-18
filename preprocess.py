@@ -7,6 +7,10 @@ import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import summary_table
 from statsmodels.tsa.deterministic import DeterministicProcess, Fourier
 
+#! コロナのデータを追加したい。というより、新たなデータを追加する汎用的な関数を作りたい
+    # - dfを渡すと、dfに追加する関数
+    #     - とりあえずコロナ期間削除、3, 10月統合版に追加
+    # - あとInterruptedTimeSeries.pyも、変数の指定を整理して汎用的にする
 
 class Att_Analysis:
     def __init__(self, is_remove_covid=True, is_addup=True):
@@ -466,3 +470,19 @@ class Att_Analysis:
             plt.text(x, y, y, ha='center', va='bottom')
         plt.bar(game_time.index, game_time['Game Time (minutes)'])
         plt.show()
+
+    def merge_new_df(self, df):
+        """dfを受け取り、self.dfに追加する
+
+        Args:
+            df (_type_): add_up, covid_removedに応じたデータフレーム
+        """
+        # self.df_monthly_att_all_addup_covid_removedに年月をキーとして、dfを追加
+        self.df_monthly_att_all_addup_covid_removed.reset_index(inplace=True)
+        self.df_monthly_att_all_addup_covid_removed.rename(columns={'index': 'Date'}, inplace=True)
+        self.df_monthly_att_all_addup_covid_removed['Date'] = pd.to_datetime(self.df_monthly_att_all_addup_covid_removed['Date'], format='%Y-%m')
+        self.df_monthly_att_all_addup_covid_removed = pd.merge(self.df_monthly_att_all_addup_covid_removed, df, on='Date', how='left')
+        self.df_monthly_att_all_addup_covid_removed['Date'] = self.df_monthly_att_all_addup_covid_removed['Date'].dt.strftime('%Y-%m')
+        self.df_monthly_att_all_addup_covid_removed.set_index('Date', inplace=True)
+        self.df_monthly_att_all_addup_covid_removed.index.name = None
+        return self.df_monthly_att_all_addup_covid_removed

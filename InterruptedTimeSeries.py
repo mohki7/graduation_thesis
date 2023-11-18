@@ -489,7 +489,7 @@ class MITS:
             # 介入前後のダミー変数を追加
             # self.intervention_index以降は1、それ以前は0
             # 短期的な影響を見る level change
-            self.df_its[f'level change {i}'] = [0 if j < intervention_index else 1 for j in range(self.df_its.shape[0])]
+            self.df_its[f'level change {i}'] = [0 if j < intervention_index else 1 for j in range(self.df_its.shape[0])] 
             # 介入後は1ずつ増えていく列を追加
             # 長期的な影響を見る slope change
             self.df_its[f'slope change {i}'] = [j - intervention_index if j >= intervention_index else 0 for j in range(1, self.df_its.shape[0]+1)]
@@ -547,8 +547,10 @@ class MITS:
             self.fit_sarimax()
         elif self.method == 'ARIMAX':
             self.fit_arimax()
+        elif self.method == "State Space Model":
+            self.fit_state_space_model()
         else:
-            print('Please select method from OLS, Periodic OLS, SARIMAX, ARIMA')
+            print('Please select method from OLS, Periodic OLS, SARIMAX, ARIMAX, State Space Model')
 
     def fit_ols(self):
         """線形回帰で中断時系列分析を行う
@@ -616,6 +618,15 @@ class MITS:
                 trial.suggest_int('seasonal_d_order', 0, 2),
                 trial.suggest_int('seasonal_ma_order', 0, 3),
                 6)
+            # order=(
+            #     trial.suggest_int('order_p', 0, 6),
+            #     trial.suggest_int('d_order', 0, 6),
+            #     trial.suggest_int('ma_order', 0, 6)
+            # )
+            # seasonal_order=(
+            #     trial.suggest_int('seasonal_ar_order', 0, 6),
+            #     trial.suggest_int('seasonal_d_order', 0, 6),
+            #     trial.suggest_int('seasonal_ma_order', 0, 6), 6)
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', category=ConvergenceWarning)
@@ -658,6 +669,15 @@ class MITS:
                 trial.suggest_int('seasonal_ar_order', 0, 3),
                 trial.suggest_int('seasonal_d_order', 0, 2),
                 trial.suggest_int('seasonal_ma_order', 0, 3))
+            # order=(
+            #     trial.suggest_int('order_p', 0, 6),
+            #     trial.suggest_int('d_order', 0, 6),
+            #     trial.suggest_int('ma_order', 0, 6)
+            # )
+            # seasonal_order=(
+            #     trial.suggest_int('seasonal_ar_order', 0, 6),
+            #     trial.suggest_int('seasonal_d_order', 0, 6),
+            #     trial.suggest_int('seasonal_ma_order', 0, 6))
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', category=ConvergenceWarning)
@@ -952,10 +972,35 @@ class MITS:
     def fit_state_space_model(self):
         """状態空間モデルで中断時系列分析を行う
         """
-        self.model = sm.tsa.statespace.DynamicFactor(self.df_sarimax['Attendance'], 
-                                                      exog=self.df_sarimax.drop(columns=['Attendance']), 
-                                                      k_factors=1, factor_order=1)
-        self.results = self.model.fit()
+        self.model_name="State Space Model"
+        if self.df_its is None:
+            self.prepare_data()
+
+        self.model = sm.tsa.UnobservedComponents(
+            self.df_its['Attendance'], # 観客者数
+            trend=True, # トレンド項
+            seasonal=6, # 季節性
+            level='local level', # モデルのタイプ
+            exog=self.df_its.drop(columns=['Attendance'])).fit() # 介入変数
+
+    def plot_state_space_model(self):
+        """状態空間モデルの結果をプロットする
+        """
+        if self.model is None:
+            self.fit()
+        # モデルの名前が現在のモデルと異なる場合も実行
+        if self.model_name != self.method:
+            self.fit()
+        if self.method != "State Space Model":
+            raise ValueError("Method must be 'State Space Model'")
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        plt.plot(self.df_its["Attendance"], label="Observations")
+        plt.axvline(self.intervention[0], color='r', label="Intervention", linestyle='--')
+        plt.xticks(rotation=90)
+        ax.set(title='Attendance with Intervention', xlabel='Date', ylabel='Attendance')
+        plt.legend()
+        plt.show()
 
     def fit_hierarchical_bayesian_model(self):
         """階層ベイズモデルで中断時系列分析を行う
