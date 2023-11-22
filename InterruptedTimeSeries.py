@@ -633,7 +633,7 @@ class MITS:
                     warnings.filterwarnings('ignore', category=ValueWarning)
                     warnings.filterwarnings('ignore', category=UserWarning)
                     # warnings.filterwarnings('ignore', category=RuntimeWarning)
-                    model = SARIMAX(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
+                    model = SARIMAX(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']), # columns=['time since start']を追加するかどうかは不明
                                     order=order, seasonal_order=seasonal_order,
                                     enforce_stationarity=False, enforce_invertibility=False)
                     model_fit = model.fit(disp=False)
@@ -684,7 +684,7 @@ class MITS:
                     warnings.filterwarnings('ignore', category=ValueWarning)
                     warnings.filterwarnings('ignore', category=UserWarning)
                     # warnings.filterwarnings('ignore', category=RuntimeWarning)
-                    model = ARIMA(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
+                    model = ARIMA(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']), # columns=['time since start']を追加するかどうかは不明
                                     order=order, seasonal_order=seasonal_order,
                                     enforce_stationarity=False, enforce_invertibility=False)
                     model_fit = model.fit(disp=False)
@@ -762,7 +762,7 @@ class MITS:
             seasonal_order=(dict_param['seasonal_ar_order'], dict_param['seasonal_d_order'], dict_param['seasonal_ma_order'], 6)
 
         self.model = SARIMAX(self.df_sarimax['Attendance'],
-                             exog=self.df_sarimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
+                             exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']), # columns=['time since start']を追加するかどうかは不明
                              order=order,
                              seasonal_order=seasonal_order).fit(disp=False) #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
 
@@ -788,7 +788,7 @@ class MITS:
             seasonal_order=(dict_param['seasonal_ar_order'], dict_param['seasonal_d_order'], dict_param['seasonal_ma_order'])
 
         self.model = ARIMA(self.df_arimax['Attendance'],
-                             exog=self.df_arimax.drop(columns=['Attendance']), # columns=['time since start']を追加するかどうかは不明
+                             exog=self.df_arimax.drop(columns=['Attendance', 'time since start']), # columns=['time since start']を追加するかどうかは不明
                              order=order).fit() #? 他のパラメータ、orderとseasonal_orderとは？どうやって決める？
         self.model_name = "ARIMAX"
 

@@ -18,7 +18,6 @@ from statsmodels.tools.sm_exceptions import ConvergenceWarning, ValueWarning
     # - dfを渡すと、dfに追加する関数
     #     - とりあえずコロナ期間削除、3, 10月統合版に追加
     # - あとInterruptedTimeSeries.pyも、変数の指定を整理して汎用的にする
-    # - 2022.04の外れ値を処理する関数を作成
 
 class Att_Analysis:
     def __init__(self, is_remove_covid=True, is_addup=True, how_completion_outlier=False):
