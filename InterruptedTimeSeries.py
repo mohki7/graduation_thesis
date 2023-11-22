@@ -413,9 +413,6 @@ class MITS:
                 show_summary(): とりあえずこれを呼び出せば、model.methodに基づいて設定したモデルのsummaryを出す。
                 show_correration(): 変数間の相関係数を出力する
 
-            #!工事中
-                ・交互作用項の実装
-                ・パラメータ最適化の実装
         """
         self.df = df # インスタンスに渡された元のデータフレーム
         self.df_its = None # 分析用のデータフレーム
@@ -477,7 +474,6 @@ class MITS:
 
     def prepare_data(self):
         """データフレームを準備する。介入前後のダミー変数、月のインデックス、そして介入後に1ずつ増えていく列を追加。介入点ごとに変数を追加
-        #! 交互作用項の実装なし
         """
         self.df_its = self.df
         # time indexは介入の数によらないので、ここで追加
@@ -504,7 +500,6 @@ class MITS:
         t*X_2023-04tが有意であれば、2023-04の介入後の傾きは有意であると言える。
         t*(X_2022-04t - X_2023-04t)が有意であれば、2022-04から2023-04の間の傾きが有意であると言える。
         #! 周期回帰の場合はどうする？
-        #! 交互作用項の実装なし
         """
         self.prepare_data()
         # 介入後の傾きについての列を追加
@@ -757,9 +752,9 @@ class MITS:
             self.prepare_data_for_sarimax()
         # 最適化するオプションがあった場合、optunaで最適化したパラメータを用いる
         if self.optim_params_sarimax is True:
-            dict_param = self.optim_param_sarimax()
-            order=(dict_param['order_p'], dict_param['d_order'], dict_param['ma_order'])
-            seasonal_order=(dict_param['seasonal_ar_order'], dict_param['seasonal_d_order'], dict_param['seasonal_ma_order'], 6)
+            self.dict_param = self.optim_param_sarimax()
+            order=(self.dict_param['order_p'], self.dict_param['d_order'], self.dict_param['ma_order'])
+            seasonal_order=(self.dict_param['seasonal_ar_order'], self.dict_param['seasonal_d_order'], self.dict_param['seasonal_ma_order'], 6)
 
         self.model = SARIMAX(self.df_sarimax['Attendance'],
                              exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']), # columns=['time since start']を追加するかどうかは不明
@@ -866,6 +861,7 @@ class MITS:
             for i in range(self.num_interventions):
                 intervention_idx_ = self.df_its.index.get_loc(self.intervention[i])
                 plt.plot(counterfactual[intervention_idx_:], color='green', label=f'{i} Counterfactual Monthly Attendance')
+                # plt.plot(counterfactual, color='green', label=f'Counterfactual Monthly Attendance')
         if is_prediction_std:
             # 信頼区間を取得
             st, data, ss2 = summary_table(self.model, alpha=alpha)
@@ -900,10 +896,11 @@ class MITS:
         cf_data = None
         if self.method == 'OLS':
             cf_data = self.df_its.reset_index().drop(columns=['index', 'Attendance']).copy(deep=True)
-            # if self.interaction:
-            #     cf_data = self.df_its[[self.variables[0], self.variables[1], self.variables[2], self.variables[3]]].copy(deep=True)
+
         elif self.method == 'SARIMAX':
-            cf_data = self.df_sarimax.drop(columns=['Attendance'])
+            cf_data = self.df_sarimax.reset_index().drop(columns=['index'])
+        elif self.method == 'ARIMAX':
+            cf_data = self.df_arimax.reset_index().drop(columns=['index'])
         elif self.method == 'Periodic OLS':
             cf_data = self.df_period.drop(columns=['Attendance'])
 
@@ -914,8 +911,25 @@ class MITS:
             cf_data[f'level change {i}'] = 0
             cf_data[f'slope change {i}'] = 0
 
+        if self.method=="SARIMAX":
+            order = (1, 1, 1)
+            seasonal_order = (1, 1, 1, 6)
+            if self.optim_params_sarimax:
+                order=(self.dict_param['order_p'], self.dict_param['d_order'], self.dict_param['ma_order'])
+                seasonal_order=(self.dict_param['seasonal_ar_order'], self.dict_param['seasonal_d_order'], self.dict_param['seasonal_ma_order'], 6)
+            y_cf_predict = SARIMAX(cf_data['Attendance'], exog=cf_data.drop(columns=['Attendance', 'time since start']), order=order, seasonal_order=seasonal_order).fit().predict()
+            return y_cf_predict
+        elif self.method=="ARIMAX":
+            order = (1, 1, 1)
+            seasonal_order = (1, 1, 1, 6)
+            if self.optim_params_sarimax:
+                order=(self.dict_param['order_p'], self.dict_param['d_order'], self.dict_param['ma_order'])
+            y_cf_predict = ARIMA(cf_data['Attendance'], exog=cf_data.drop(columns=['Attendance', 'time since start']), order=order).fit().predict()
+            return y_cf_predict
+
         # 反事実を予測
         cf_data.insert(0, 'cep', [1]*len(cf_data)) # 定数の列を追加
+
         y_cf_predict = self.model.predict(cf_data)
 
         return y_cf_predict
