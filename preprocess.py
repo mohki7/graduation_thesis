@@ -2,22 +2,31 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import warnings
+import optuna
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+from optuna.samplers import TPESampler
 
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import summary_table
 from statsmodels.tsa.deterministic import DeterministicProcess, Fourier
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tools.sm_exceptions import ConvergenceWarning, ValueWarning
+
 
 #! コロナのデータを追加したい。というより、新たなデータを追加する汎用的な関数を作りたい
     # - dfを渡すと、dfに追加する関数
     #     - とりあえずコロナ期間削除、3, 10月統合版に追加
     # - あとInterruptedTimeSeries.pyも、変数の指定を整理して汎用的にする
+    # - 2022.04の外れ値を処理する関数を作成
 
 class Att_Analysis:
-    def __init__(self, is_remove_covid=True, is_addup=True):
+    def __init__(self, is_remove_covid=True, is_addup=True, how_completion_outlier=False):
         """
         Args:
             is_remove_covid (bool, optional): コロナの影響で中止になった2021年を除外するかどうか. Defaults to True
             is_addup (bool, optional): 3月と10月を4月と9月に合算するかどうか. Defaults to True
+            completion_outlier(choice, optional): 2022年4月の外れ値を補完するかどうか. Defaults to False。with_mean, with_predict, with_predict_with_mean, with_medianから選択
 
         params: 
             START_YEAR: データの最初の年
@@ -95,6 +104,8 @@ class Att_Analysis:
         self.df_2022 = None
         self.df_2023 = None
 
+        self.how_completion_outlier = how_completion_outlier
+
         self.download_data()
         self.get_monthly_att_all()
         self.get_yearly_att()
@@ -166,7 +177,12 @@ class Att_Analysis:
         """
         if self.IS_REMOVE_COVID:
             if self.IS_ADD_UP:
-                return self.df_monthly_att_all_addup_covid_removed
+                # self.how_completion_outlierがFalse出ないときのみcompletion_outlier()を実行
+                if self.how_completion_outlier is False:
+                    return self.df_monthly_att_all_addup_covid_removed
+                else:
+                    self.completion_outlier()
+                    return self.df_monthly_att_all_addup_covid_removed
             else:
                 return self.df_monthly_att_all_covid_removed
         else:
@@ -486,3 +502,110 @@ class Att_Analysis:
         self.df_monthly_att_all_addup_covid_removed.set_index('Date', inplace=True)
         self.df_monthly_att_all_addup_covid_removed.index.name = None
         return self.df_monthly_att_all_addup_covid_removed
+
+    def completion_outlier(self):
+        """2022年4月の外れ値を補完する関数
+        - 補完方法を指定して補完するようにしたい。
+            - with_mean : 過去の4月の平均値で補完
+            - with_predict : 各年の5-9月の観客者数から、4月の観客者数を予測して補完
+            - with_predict_with_mean : with_predictの結果をさらに過去の4月の平均値で補完
+            - with_median : 過去の4月の中央値で補完
+        """
+        if self.how_completion_outlier == 'with_mean':
+            df = self.df_monthly_att_all_addup_covid_removed.copy()
+            # 過去の4月の観客者数のみを抽出
+            # 2023年4月は介入後のため、性質が異なるので除いたほうが良いと判断
+            april_df = df[df.index.str.contains('04')]
+            # 2023年4月を除外
+            april_df = april_df.drop('2023-04')
+            mean_value = april_df.loc['2013-04':'2019-04', 'Attendance'].mean()
+            df.loc['2022-04', 'Attendance'] = int(mean_value)
+            self.df_monthly_att_all_addup_covid_removed = df
+            print(f'2022年4月は平均値{int(mean_value)}で補完しました。')
+
+        elif self.how_completion_outlier == 'with_predict':
+            self.predict_april_attendance()
+
+        elif self.how_completion_outlier == 'with_median':
+            df = self.df_monthly_att_all_addup_covid_removed.copy()
+            # 過去の4月の観客者数のみを抽出
+            april_df = df[df.index.str.contains('04')]
+            # 2023年4月を除外
+            april_df = april_df.drop('2023-04')
+            median_value = april_df.loc['2013-04':'2019-04', 'Attendance'].median()
+            df.loc['2022-04', 'Attendance'] = median_value
+            self.df_monthly_att_all_addup_covid_removed = df
+            print(f'2022年4月は中央値{int(median_value)}で補完しました。')
+
+
+    def predict_april_attendance(self):
+        """各年の5-9月の観客者数から、4月の観客者数を予測して補完
+        """
+        df = self.df_monthly_att_all_addup_covid_removed.copy()
+        df_tmp = df[df.index < '2022-04-01']
+
+        # SARIMAを用いて、2022年4月のデータを予測
+        dict_param = self.optim_param_sarimax(df_tmp)
+        order=(dict_param['order_p'], dict_param['d_order'], dict_param['ma_order'])
+        seasonal_order=(dict_param['seasonal_ar_order'], dict_param['seasonal_d_order'], dict_param['seasonal_ma_order'], 6)
+
+        model = SARIMAX(df_tmp, order=order, seasonal_order=seasonal_order)
+        results = model.fit()
+
+        pred = results.predict(start='2022-04', end='2022-04')
+        # predを図示
+        # plt.figure(figsize=(12, 8))
+        # plt.title('Predicted Attendance')
+        # plt.xlabel('Month')
+        # plt.xticks(rotation=90)
+        # plt.ylabel('Attendance')
+        # plt.plot(df, color='red')
+        # plt.plot(pred, color='blue')
+        # plt.legend(['Data Points', 'Predicted Attendance'])
+        # plt.show()
+        pred = int(pred.values[0])
+
+        df.loc['2022-04'] = pred
+        self.df_monthly_att_all_addup_covid_removed = df
+
+        print(f"AIC:{results.aic}")
+        print(f'2022年4月は予測モデルで補完しました。値:{pred}')
+
+    def optim_param_sarimax(self, df, n_trials=300):
+        """SARIMAXモデルのパラメータをOptunaで最適化する
+
+        Args:
+            n_trials (int, optional): 試行回数。増やすとより良いパラメータの組み合わせを見つけられるが、計算時間も増加する Defaults to 100.
+        """
+        seed = 0
+        def objective(trial):
+            # SARIMAXモデルのパラメータを設定
+            order=(
+                trial.suggest_int('order_p', 0, 3),
+                trial.suggest_int('d_order', 0, 2),
+                trial.suggest_int('ma_order', 0, 3)
+            )
+            seasonal_order=(
+                trial.suggest_int('seasonal_ar_order', 0, 3),
+                trial.suggest_int('seasonal_d_order', 0, 2),
+                trial.suggest_int('seasonal_ma_order', 0, 3))
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=ConvergenceWarning)
+                    warnings.filterwarnings('ignore', category=ValueWarning)
+                    warnings.filterwarnings('ignore', category=UserWarning)
+
+                    model = SARIMAX(df,
+                                    order=order, seasonal_order=seasonal_order)
+                    model_fit = model.fit(disp=False)
+                    return model_fit.aic
+            except Exception as e:
+                return float('inf')
+
+        # Optunaによる最適化
+        sampler = TPESampler(seed=seed)
+        study = optuna.create_study(direction='minimize', sampler=sampler)
+        study.optimize(objective, n_trials=n_trials)
+
+        # 最適なパラメータを返す
+        return study.best_params
