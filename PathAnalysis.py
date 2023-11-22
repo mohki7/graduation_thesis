@@ -7,8 +7,8 @@ import statsmodels.formula.api as smf
 class PathAnalysis:
     """経路分析を行うクラス"""
 
-    def __init__(self, intervention='2023-04'):
-        self.att_df = Att_Analysis(is_remove_covid=True, is_addup=True).get_monthly_all_df().reset_index()
+    def __init__(self, intervention='2023-04', how_completion_outlier='with_predict'):
+        self.att_df = Att_Analysis(is_remove_covid=True, is_addup=True, how_completion_outlier=how_completion_outlier).get_monthly_all_df().reset_index()
         self.game_df = pd.read_csv("./data/monthly_average_game_time.csv")
         self.df = None
         self.intervention = intervention
