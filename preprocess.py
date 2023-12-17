@@ -6,6 +6,8 @@ import warnings
 import optuna
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 from optuna.samplers import TPESampler
+import holidays
+import datetime
 
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import summary_table
@@ -87,6 +89,8 @@ class Att_Analysis:
         self.df_monthly_att_all_addup = None
         self.df_monthly_att_all_addup_covid_removed = None
         self.df_game_time_addup= None
+        self.df_holidays = None
+        self.df_non_holidays = None
 
         self.fig_size = (12, 8)
 
@@ -212,6 +216,129 @@ class Att_Analysis:
 
         df = df[df.index.str.contains(str(year))]
         return df
+
+    def get_holidays_df(self):
+        """祝日のみのデータフレームと祝日以外のデータフレームを返す
+        """
+        self.is_holiday(self.df)
+        self.df_holidays = self.df[self.df['is_holiday'] == 1]
+        self.df_non_holidays = self.df[self.df['is_holiday'] == 0]
+
+        self.get_monthly_att_all_for_holidays() # holidays関連のdfで月ごとの観客数を取得
+        self.get_monthly_att_all_for_non_holidays() # non_holidays関連のdfで月ごとの観客数を取得
+        self.remove_covid_for_holidays() # holidays関連のdfでコロナの影響を除去
+        self.add_mar_oct_to_apr_sep_for_holidays() # hokidays関連のdfで3月と10月を4月と9月に合算
+
+        return self.df_holidays, self.df_non_holidays
+
+    def remove_covid_for_holidays(self):
+        """holidays関連のdfでコロナの影響を除去
+        """
+        # self.df_holidays = self.df_holidays.drop([f'2021-0{month}' for month in range(4, 10)], axis=0).drop(['2021-10'])
+        self.df_holidays = self.df_holidays.drop([f'2021-0{month}' for month in range(4, 10)], axis=0)
+        # self.df_non_holidays = self.df_non_holidays.drop([f'2021-0{month}' for month in range(4, 10)], axis=0).drop(['2021-10'])
+        self.df_non_holidays = self.df_non_holidays.drop([f'2021-0{month}' for month in range(4, 10)], axis=0)
+
+    def add_mar_oct_to_apr_sep_for_holidays(self):
+        """holiday関連のdfで3月と10月を4月と9月に合算
+        """
+        years = [year for year in range(self.START_YEAR, self.END_YEAR + 1)]
+
+        for year in years:
+            try:
+                self.df_holidays.loc[f'{year}-04', 'Attendance'] += self.df_holidays.loc[f'{year}-03', 'Attendance']
+            except:
+                pass
+            try:
+                self.df_holidays.loc[f'{year}-09', 'Attendance'] += self.df_holidays.loc[f'{year}-10', 'Attendance']
+            except:
+                pass
+            try:
+                self.df_holidays.drop(f'{year}-03', inplace=True)
+            except:
+                pass
+            try:
+                self.df_holidays.drop(f'{year}-10', inplace=True)
+            except:
+                pass
+
+            try:
+                self.df_non_holidays.loc[f'{year}-04', 'Attendance'] += self.df_non_holidays.loc[f'{year}-03', 'Attendance']
+            except:
+                pass
+            try:
+                self.df_non_holidays.loc[f'{year}-09', 'Attendance'] += self.df_non_holidays.loc[f'{year}-10', 'Attendance']
+            except:
+                pass
+            try:
+                self.df_non_holidays.drop(f'{year}-03', inplace=True)
+            except:
+                pass
+            try:
+                self.df_non_holidays.drop(f'{year}-10', inplace=True)
+            except:
+                pass
+
+    def get_monthly_att_all_for_holidays(self):
+        """holidays関連のdfで月ごとの観客数を取得
+        """
+        df_monthly_att_all = pd.DataFrame()
+        for year in range(self.START_YEAR, self.END_YEAR + 1):
+            df_monthly_att = self.get_monthly_att_for_holidays(year)
+            df_monthly_att_all = pd.concat([df_monthly_att_all, df_monthly_att], axis=0)
+
+        self.df_holidays = df_monthly_att_all
+
+    def get_monthly_att_all_for_non_holidays(self):
+        """holidays関連のdfで月ごとの観客数を取得
+        """
+        df_monthly_att_all = pd.DataFrame()
+        for year in range(self.START_YEAR, self.END_YEAR + 1):
+            df_monthly_att = self.get_monthly_att_for_non_holidays(year)
+            df_monthly_att_all = pd.concat([df_monthly_att_all, df_monthly_att], axis=0)
+
+        self.df_non_holidays = df_monthly_att_all
+
+    def get_monthly_att_for_holidays(self, year):
+        """holidays関連のdfで月ごとの観客数を取得
+        """
+        # self.dfから指定した年のデータを抽出
+        df_ = self.df_holidays[self.df_holidays['Year'] == year]
+
+        df_monthly_att = df_.groupby('Month').agg({'Attendance': 'sum'}).astype(int)
+
+        df_monthly_att.index = [str(year) + '-' + str(month) for month in df_monthly_att.index]
+        df_monthly_att.index = pd.to_datetime(df_monthly_att.index, format='%Y-%m').strftime('%Y-%m')
+
+        return df_monthly_att
+
+    def get_monthly_att_for_non_holidays(self, year):
+        """non_holidays関連のdfで月ごとの観客数を取得
+        """
+        # self.dfから指定した年のデータを抽出
+        df_ = self.df_non_holidays[self.df_non_holidays['Year'] == year]
+
+        df_monthly_att = df_.groupby('Month').agg({'Attendance': 'sum'}).astype(int)
+
+        df_monthly_att.index = [str(year) + '-' + str(month) for month in df_monthly_att.index]
+        df_monthly_att.index = pd.to_datetime(df_monthly_att.index, format='%Y-%m').strftime('%Y-%m')
+
+        return df_monthly_att
+
+    def is_holiday(self, df):
+        # USの祝日を取得
+        us_holidays = holidays.UnitedStates()
+        # dateをdatetime型に変換
+        dates = df['Date'].apply(lambda x: x if isinstance(x, datetime.datetime) else datetime.datetime.strptime(x, '%Y-%m-%d'))
+
+        holidays_list = []
+        # 土日祝日または金曜日の場合は1を返す
+        for date in dates:
+            if date.weekday() >= 4 or date in us_holidays: # 4は金曜日。金曜日も動員数が多いらしいので金曜日も含むように。
+                holidays_list.append(1)
+            else:
+                holidays_list.append(0)
+        df['is_holiday'] = holidays_list
 
     def get_covid_removed_df(self):
         """コロナの影響で中止になった2021年を除外したデータフレームを作成
