@@ -15,6 +15,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tools.sm_exceptions import ConvergenceWarning, ValueWarning
+from statsmodels.tsa.statespace.kalman_filter import KalmanFilter
 # from .autonotebook import tqdm as notebook_tqdm
 
 class ITS:
@@ -355,7 +356,7 @@ class ITS:
 class MITS:
     """中断時系列分析を行うクラス。複数の介入点を設定できる
     """
-    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False, optim_params_sarimax=False, optim_params_arimax=False, seed=0):
+    def __init__(self, df, interventions, method, interaction=False, period=6, order=3, optim_params_periodic_ols=False, optim_params_sarimax=False, optim_params_arimax=False, seed=0, layer=False):
         """
         Args:
             DataFrame関連
@@ -365,6 +366,7 @@ class MITS:
                 df_its (DataFrame): OLSで分析するためのデータフレーム。t, xt, t*xtの列を持つ（時間のインデックス、level change、slope change）
                 df_period (DataFrame): Periodic OLSで分析するためのデータフレーム。t, xt, t*xt, sin(2πt/period), cos(2πt/period)の列を持つ（時間のインデックス、level change、slope change、sin、cos）
                 X (DataFrame): モデルに入力する説明変数。分析に用いた変数間の相関関係を確認するために用いる
+                layer: 層別分析かどうか。Defaults to False.
 
             モデルの設定
                 全体
@@ -426,6 +428,7 @@ class MITS:
         self.num_interventions = len(interventions)
         self.method = method
         self.interaction = interaction
+        self.layer=layer
 
         self.period = period
         self.order = order
@@ -613,15 +616,6 @@ class MITS:
                 trial.suggest_int('seasonal_d_order', 0, 2),
                 trial.suggest_int('seasonal_ma_order', 0, 3),
                 6)
-            # order=(
-            #     trial.suggest_int('order_p', 0, 6),
-            #     trial.suggest_int('d_order', 0, 6),
-            #     trial.suggest_int('ma_order', 0, 6)
-            # )
-            # seasonal_order=(
-            #     trial.suggest_int('seasonal_ar_order', 0, 6),
-            #     trial.suggest_int('seasonal_d_order', 0, 6),
-            #     trial.suggest_int('seasonal_ma_order', 0, 6), 6)
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', category=ConvergenceWarning)
@@ -636,14 +630,45 @@ class MITS:
             except Exception as e:
                 return float('inf')
 
+        def objective2(trial):
+            """層別分析用。季節成分が6とは限らないもの。"""
+            order=(
+                trial.suggest_int('order_p', 0, 3),
+                trial.suggest_int('d_order', 0, 2),
+                trial.suggest_int('ma_order', 0, 3)
+            )
+            seasonal_order=(
+                trial.suggest_int('seasonal_ar_order', 0, 3),
+                trial.suggest_int('seasonal_d_order', 0, 2),
+                trial.suggest_int('seasonal_ma_order', 0, 3),
+                trial.suggest_int('seasonal_period', 1, 12))
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', category=ConvergenceWarning)
+                    warnings.filterwarnings('ignore', category=ValueWarning)
+                    warnings.filterwarnings('ignore', category=UserWarning)
+                    # warnings.filterwarnings('ignore', category=RuntimeWarning)
+                    model = SARIMAX(self.df_sarimax['Attendance'], exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']), # columns=['time since start']を追加するかどうかは不明
+                                    order=order, seasonal_order=seasonal_order,
+                                    enforce_stationarity=False, enforce_invertibility=False)
+                    model_fit = model.fit(disp=False)
+                    return model_fit.aic
+            except Exception as e:
+                return float('inf')
         # Optunaによる最適化
         sampler = TPESampler(seed=self.seed)
         study = optuna.create_study(direction='minimize', sampler=sampler)
-        study.optimize(objective, n_trials=n_trials)
-        print(f"seed値:{self.seed}")
+        if self.layer:
+            study.optimize(objective2, n_trials=n_trials)
+            return study.best_params
+        else:
+            study.optimize(objective, n_trials=n_trials)
+            dictionary = study.best_params
+            dictionary['seasonal_period'] = 6
+            return dictionary
+        # print(f"seed値:{self.seed}")
 
         # 最適なパラメータを返す
-        return study.best_params
 
     def optim_param_arimax(self, n_trials=300):
         """ARIMAXモデルのパラメータをOptunaで最適化する
@@ -664,15 +689,6 @@ class MITS:
                 trial.suggest_int('seasonal_ar_order', 0, 3),
                 trial.suggest_int('seasonal_d_order', 0, 2),
                 trial.suggest_int('seasonal_ma_order', 0, 3))
-            # order=(
-            #     trial.suggest_int('order_p', 0, 6),
-            #     trial.suggest_int('d_order', 0, 6),
-            #     trial.suggest_int('ma_order', 0, 6)
-            # )
-            # seasonal_order=(
-            #     trial.suggest_int('seasonal_ar_order', 0, 6),
-            #     trial.suggest_int('seasonal_d_order', 0, 6),
-            #     trial.suggest_int('seasonal_ma_order', 0, 6))
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings('ignore', category=ConvergenceWarning)
@@ -701,7 +717,10 @@ class MITS:
         """
         if self.df_its is None:
             self.prepare_data()
+
         self.df_sarimax = self.df_its.copy(deep=True)
+        # 最初の値を全ての値から引く
+        self.df_sarimax['Attendance'] = self.df_sarimax['Attendance'] - self.df_sarimax['Attendance'][0]
 
     def optim_params_period_ols(self):
         """周期回帰に使う最適パラメータを探索する
@@ -735,7 +754,7 @@ class MITS:
         # 訓練
         self.model_name = 'Periodic OLS'
 
-    def fit_sarimax(self, order=(1, 1, 1), seasonal_order=(1, 1, 1, 12)):
+    def fit_sarimax(self, order=(0, 2, 3), seasonal_order=(0, 2, 3, 6)):
         """SARIMAで中断時系列分析を行う
 
         Args:
@@ -754,7 +773,7 @@ class MITS:
         if self.optim_params_sarimax is True:
             self.dict_param = self.optim_param_sarimax()
             order=(self.dict_param['order_p'], self.dict_param['d_order'], self.dict_param['ma_order'])
-            seasonal_order=(self.dict_param['seasonal_ar_order'], self.dict_param['seasonal_d_order'], self.dict_param['seasonal_ma_order'], 6)
+            seasonal_order=(self.dict_param['seasonal_ar_order'], self.dict_param['seasonal_d_order'], self.dict_param['seasonal_ma_order'], self.dict_param['seasonal_period'])
 
         self.model = SARIMAX(self.df_sarimax['Attendance'],
                              exog=self.df_sarimax.drop(columns=['Attendance', 'time since start']), # columns=['time since start']を追加するかどうかは不明
@@ -850,8 +869,8 @@ class MITS:
         plt.xlabel('Month')
         plt.ylabel('Attendance')
         plt.xticks(rotation=90)
-        plt.plot(self.df.index, self.df['Attendance'], color='red')
-        plt.scatter(self.df.index, self.df['Attendance'], color='red', label='Monthly Attendance (before intervention)')
+        plt.plot(self.df.index, self.df['Attendance']-self.df['Attendance'][0], color='red')
+        plt.scatter(self.df.index, self.df['Attendance']-self.df['Attendance'][0], color='red', label='Monthly Attendance (before intervention)')
         plt.plot(pred, color='blue', label='Predicted Monthly Attendance')
 
         if is_counterfactual:
@@ -860,7 +879,7 @@ class MITS:
             # 介入後のデータのみをプロット
             for i in range(self.num_interventions):
                 intervention_idx_ = self.df_its.index.get_loc(self.intervention[i])
-                plt.plot(counterfactual[intervention_idx_:], color='green', label=f'{i} Counterfactual Monthly Attendance')
+                plt.plot(counterfactual[intervention_idx_:]-counterfactual[0], color='green', label=f'{i} Counterfactual Monthly Attendance')
                 # plt.plot(counterfactual, color='green', label=f'Counterfactual Monthly Attendance')
         if is_prediction_std:
             # 信頼区間を取得
@@ -903,7 +922,9 @@ class MITS:
             cf_data = self.df_arimax.reset_index().drop(columns=['index'])
         elif self.method == 'Periodic OLS':
             cf_data = self.df_period.drop(columns=['Attendance'])
-
+        elif self.method == "State Space Model":
+            cf_data = self.df_its.reset_index().drop(columns=['index']).copy(deep=True)
+            # print(cf_data)
         if cf_data is None:
             raise ValueError("Method must be one of 'OLS', 'SARIMAX', or 'Periodic OLS'")
 
@@ -916,7 +937,7 @@ class MITS:
             seasonal_order = (1, 1, 1, 6)
             if self.optim_params_sarimax:
                 order=(self.dict_param['order_p'], self.dict_param['d_order'], self.dict_param['ma_order'])
-                seasonal_order=(self.dict_param['seasonal_ar_order'], self.dict_param['seasonal_d_order'], self.dict_param['seasonal_ma_order'], 6)
+                seasonal_order=(self.dict_param['seasonal_ar_order'], self.dict_param['seasonal_d_order'], self.dict_param['seasonal_ma_order'], self.dict_param['seasonal_period'])
             y_cf_predict = SARIMAX(cf_data['Attendance'], exog=cf_data.drop(columns=['Attendance', 'time since start']), order=order, seasonal_order=seasonal_order).fit().predict()
             return y_cf_predict
         elif self.method=="ARIMAX":
@@ -926,6 +947,16 @@ class MITS:
                 order=(self.dict_param['order_p'], self.dict_param['d_order'], self.dict_param['ma_order'])
             y_cf_predict = ARIMA(cf_data['Attendance'], exog=cf_data.drop(columns=['Attendance', 'time since start']), order=order).fit().predict()
             return y_cf_predict
+
+        elif self.method == "State Space Model":
+            # print(cf_data)
+            cf_predict = sm.tsa.UnobservedComponents(
+                cf_data['Attendance'] - cf_data['Attendance'][0], # 観客者数
+                trend=True, # トレンド項
+                seasonal=6, # 季節性
+                level='local linear trend', # モデルのタイプ。レベルチェンジとスロープチェンジを考慮するd
+                exog=cf_data.drop(columns=['Attendance'])).fit().predict()
+            return cf_predict
 
         # 反事実を予測
         cf_data.insert(0, 'cep', [1]*len(cf_data)) # 定数の列を追加
@@ -989,13 +1020,49 @@ class MITS:
         self.model_name="State Space Model"
         if self.df_its is None:
             self.prepare_data()
-
+        
+        # 外れ値の場所にパルスを入れる
+        pulse_date = '2022-04'
+        self.df_its['pulse1'] = (self.df_its.index == pulse_date).astype(int)
+        # pulse_date = '2015-04'
+        # self.df_its['pulse2'] = (self.df_its.index == pulse_date).astype(int)
         self.model = sm.tsa.UnobservedComponents(
-            self.df_its['Attendance'], # 観客者数
-            trend=True, # トレンド項
+            # initial_state=self.df_its['Attendance'].iloc[0], # 初期値
+            endog=self.df_its['Attendance']-self.df_its['Attendance'][0], # 観客者数
+            # trend='stochastic', # トレンド項
+            trend='stochastic', # トレンド項
             seasonal=6, # 季節性
-            level='local level', # モデルのタイプ
+            level='local linear trend', # モデルのタイプ。レベルチェンジとスロープチェンジを考慮する
+            stochastic_seasonal=False, # 季節性成分も確率的に変化
+            stochastic_trend=True, # トレンドも確率的に変化
             exog=self.df_its.drop(columns=['Attendance'])).fit() # 介入変数
+    
+    # def fit_state_space_model(self):
+    #     self.model_name="State Space Model"
+    #     if self.df_its is None:
+    #         self.prepare_data()
+    #     # モデルのパラメータを設定
+    #     # モデルのパラメータを設定
+    #     k_endog = 1
+    #     k_states = 1
+
+    #     # カルマンフィルタのインスタンスを作成
+    #     kf = KalmanFilter(k_endog=k_endog, k_states=k_states, endog=self.df_its['Attendance'].values)
+
+    #     # 初期状態を設定
+    #     kf.initial_state_mean = np.zeros(k_states)
+    #     kf.initial_state_cov = np.ones((k_states, k_states))
+
+    #     # モデルのパラメータを設定
+    #     kf.transition_matrices = np.eye(k_states)  # 状態遷移行列
+    #     kf.observation_matrices = np.eye(k_endog, k_states)  # 観測行列
+    #     kf.observation_covariance = np.eye(k_endog)  # 観測ノイズの共分散行列
+    #     kf.transition_covariance = np.eye(k_states)  # 状態ノイズの共分散行列
+
+    #     # フィルタリング
+    #     filtered_state_means, filtered_state_covariances = kf.filter(self.df_its['Attendance'].values)
+        
+    #     return filtered_state_means, filtered_state_covariances
 
     def plot_state_space_model(self):
         """状態空間モデルの結果をプロットする
@@ -1009,7 +1076,8 @@ class MITS:
             raise ValueError("Method must be 'State Space Model'")
 
         fig, ax = plt.subplots(figsize=(10, 6))
-        plt.plot(self.df_its["Attendance"], label="Observations")
+        plt.plot(self.df_its["Attendance"]-self.df_its['Attendance'][0], label="Observations")
+        plt.plot(self.model.fittedvalues, label="Prediction")
         plt.axvline(self.intervention[0], color='r', label="Intervention", linestyle='--')
         plt.xticks(rotation=90)
         ax.set(title='Attendance with Intervention', xlabel='Date', ylabel='Attendance')
